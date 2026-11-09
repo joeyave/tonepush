@@ -334,7 +334,8 @@ impl App {
                             param.name.clone(),
                         );
                         let is_ir = param.display.as_deref() == Some("ir_select");
-                        let (reading, choices) = if is_ir {
+                        let is_nam_model = param.display.as_deref() == Some("nam_slot");
+                        let (reading, choices) = if is_ir || is_nam_model {
                             let slot = (*value).round() as i64;
                             let ir_name = |s: i64| {
                                 self.irs
@@ -343,8 +344,12 @@ impl App {
                                     .map(|(_, name)| name.trim().to_owned())
                                     .filter(|name| !name.is_empty())
                             };
-                            let num = slot + 1;
-                            let reading = match ir_name(slot) {
+                            let (slot_index, num) = if is_nam_model {
+                                (slot - 1, slot)
+                            } else {
+                                (slot, slot + 1)
+                            };
+                            let reading = match ir_name(slot_index) {
                                 Some(name) => format!("{num}: {name}"),
                                 None => format!("{num}: ---"),
                             };
@@ -552,8 +557,20 @@ impl App {
     /// Turn one control: kept in our copy at once, and sent to the pedal.
     /// The cab's controls are addressed on the same block by the same index;
     /// only which half they belong to differs, and the pedal tells them apart.
-    fn set_param(&mut self, position: i64, index: usize, value: f32, kind: Kind, paired: bool) {
+    fn set_param(&mut self, position: i64, index: usize, mut value: f32, kind: Kind, paired: bool) {
         if let Some(slot) = self.chain.iter_mut().find(|b| b.position == position) {
+            if !paired
+                && index == hx_catalog::NAM_LITE_MODEL_PARAM
+                && self
+                    .catalog
+                    .as_ref()
+                    .is_some_and(|catalog| catalog.is_nam_lite(slot.model))
+            {
+                value = value.round();
+                if slot.values.get(index) == Some(&value) {
+                    return;
+                }
+            }
             let values = if paired {
                 &mut slot.paired_values
             } else {
@@ -743,7 +760,7 @@ fn control_cell(
     let mut current = control.value;
     let mut changed = false;
     let mut parts: Vec<Response> = Vec::new();
-    let menu_like = param.kind == Kind::Enum && control.choices.is_some();
+    let menu_like = control.choices.is_some();
     match (param.kind, &control.choices) {
         (Kind::Switch, _) => {
             let mut child = ui.new_child(
@@ -759,7 +776,7 @@ fn control_cell(
             }
             parts.push(hit);
         }
-        (Kind::Enum, Some(choices)) => {
+        (_, Some(choices)) => {
             let width = (cell - 6.0).min(96.0);
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
@@ -770,7 +787,8 @@ fn control_cell(
                     ))
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
-            let chosen = current.round().max(0.0) as usize;
+            let chosen = ((current - param.min).round().max(0.0) as usize)
+                .min(choices.len().saturating_sub(1));
             let tooltip = match choices.get(chosen) {
                 Some(full) => format!("{}: {full}", param.name),
                 None => format!("{}: choose", param.name),
@@ -805,7 +823,7 @@ fn control_cell(
                                     .clicked()
                                     && !on
                                 {
-                                    current = n as f32;
+                                    current = n as f32 + param.min;
                                     changed = true;
                                 }
                             }
@@ -4063,9 +4081,9 @@ fn snapshot_column_width(count: usize, width: f32, column: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// A menu control, such as a compressor's Ratio, opens its list on a
-    /// click and takes the choice picked there. The right-click assignment
-    /// menu on the same button used to close the list in the frame it
+    /// A menu control, such as a compressor's Ratio or NAM Polarity, opens its
+    /// list on a click and takes the choice picked there. The right-click
+    /// assignment menu on the same button used to close the list in the frame it
     /// opened, so nothing could be picked.
     #[test]
     fn a_menu_control_opens_its_list_and_takes_the_choice() {
@@ -4108,8 +4126,6 @@ mod tests {
             .with_size(egui::vec2(400.0, 500.0))
             .build_ui_state(
                 |ui, seen: &mut Seen| {
-                    // The editor's type is bound from the pass after it is
-                    // installed.
                     if ui.ctx().cumulative_pass_nr() == 0 {
                         theme::install(ui.ctx(), theme::Appearance::Dark);
                         return;

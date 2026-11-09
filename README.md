@@ -227,6 +227,11 @@ resolve from the CLI's working directory. Direct USB access is available when
 the variable is unset. Offline and StompStation PRO commands still run in the
 CLI. Close the editor to remove the socket.
 
+For an HX Stomp running the ten-control HX Stomp NAM Lite mod that
+reuses model ID 555, set `TONEPUSH_HX_NAM_LITE=1` when starting TonePush.
+The editor and CLI then show NAM controls and resolve capture names from the
+pedal's IR slot list. Enable this setting only with that firmware.
+
 StompStation PRO commands live under `tonepush pro`, so the two devices'
 different slot conventions cannot be confused:
 

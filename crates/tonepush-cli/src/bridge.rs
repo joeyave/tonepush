@@ -1,7 +1,7 @@
 //! Local transport for running HX commands in the editor's USB worker.
 
-use crate::{BatchStep, Cli, Cmd, OUTPUT, parse_batch, run_on};
-use anyhow::{Context, Result, bail};
+use crate::{parse_batch, run_on, BatchStep, Cli, Cmd, OUTPUT};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};

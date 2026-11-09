@@ -45,7 +45,7 @@ mod hlx;
 mod voidx;
 mod wav;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::Write;
 
@@ -820,7 +820,14 @@ fn run_on(s: &mut hx_usb::Session, cmd: &Cmd) -> Result<()> {
         Cmd::Topology => {
             let preset = s.read_preset()?;
             let catalog = hx_catalog::Catalog::load().ok();
+            let irs = nam_capture_names(s, &preset, catalog.as_ref())?;
             let name = |slot: &hx_proto::preset::Slot| -> String {
+                if slot
+                    .model
+                    .is_some_and(|m| catalog.as_ref().is_some_and(|c| c.is_nam_lite(m)))
+                {
+                    return hx_catalog::nam_lite_label(&slot.values, &irs);
+                }
                 slot.model
                     .and_then(|m| catalog.as_ref().and_then(|c| c.model_number(m)))
                     .map(|m| m.name.clone())
@@ -1754,13 +1761,21 @@ fn show_chain(session: &mut hx_usb::Session) -> Result<()> {
     }
     println!();
 
+    let irs = nam_capture_names(session, &preset, catalog.as_ref())?;
     for (position, block) in preset.blocks() {
         let model = block.model.unwrap_or_default();
         let named = catalog.as_ref().and_then(|c| c.model_number(model));
         println!(
             "{:>2}. {:<24} {}",
             position + 1,
-            named.map_or_else(|| format!("model {model}"), |m| m.name.clone()),
+            if catalog.as_ref().is_some_and(|c| c.is_nam_lite(model)) {
+                format!(
+                    "NAM A2 Lite · {}",
+                    hx_catalog::nam_lite_label(&block.values, &irs)
+                )
+            } else {
+                named.map_or_else(|| format!("model {model}"), |m| m.name.clone())
+            },
             if block.enabled { "" } else { "(bypassed)" },
         );
         show_params(catalog.as_ref(), model, &block.values);
@@ -1780,6 +1795,21 @@ fn show_chain(session: &mut hx_usb::Session) -> Result<()> {
         eprintln!("\n(install HX Edit for model and parameter names)");
     }
     Ok(())
+}
+
+fn nam_capture_names(
+    session: &mut hx_usb::Session,
+    preset: &hx_proto::Preset,
+    catalog: Option<&hx_catalog::Catalog>,
+) -> Result<Vec<(i64, String)>> {
+    if catalog.is_some_and(|c| {
+        preset
+            .blocks()
+            .any(|(_, block)| block.model.is_some_and(|model| c.is_nam_lite(model)))
+    }) {
+        return Ok(optional_device_value(session.irs())?.unwrap_or_default());
+    }
+    Ok(Vec::new())
 }
 
 /// What a file would do to the chain it is going onto, so a block on a branch
@@ -2402,7 +2432,7 @@ mod tests {
 
         use hx_proto::frame::{ChannelHeader, MSG_DATA};
         use hx_proto::msgpack::{Encoder, Value};
-        use hx_proto::rpc::{Message, StreamReader, key, op};
+        use hx_proto::rpc::{key, op, Message, StreamReader};
         use hx_proto::{ChannelId, Frame};
 
         #[derive(Default)]

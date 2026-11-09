@@ -6,7 +6,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
-use tonepush_cli::bridge::{Reply, Request, event, private_parent};
+use tonepush_cli::bridge::{event, private_parent, Reply, Request};
 
 pub struct Bridge(PathBuf);
 
@@ -18,6 +18,7 @@ impl Drop for Bridge {
 
 pub fn listen(path: PathBuf, commands: Sender<Cmd>) -> Result<Bridge> {
     private_parent(&path)?;
+    let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path)?;
     std::thread::spawn(move || {
         for stream in listener.incoming() {
