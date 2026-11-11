@@ -1242,12 +1242,28 @@ impl App {
                     }
                     _ => Vec::new(),
                 };
+                // With the same controls in the same order it can take over
+                // the block as it stands, assignments and snapshots and
+                // all. Only where the path's DSP is counted: a document
+                // over the budget is one the pedal does not answer.
+                let same_controls = self.catalog.as_ref().is_some_and(|catalog| {
+                    match (catalog.symbol(original_number), catalog.symbol(model)) {
+                        (Some(held), Some(chosen)) => held.parameters == chosen.parameters,
+                        _ => false,
+                    }
+                });
+                let counted = usize::try_from(position)
+                    .ok()
+                    .and_then(|slot| self.room_at(slot))
+                    .is_some();
+                let in_place = !carry.is_empty() && same_controls && counted;
                 self.dirty = true;
                 self.send(Cmd::TryModel {
                     block: position,
                     model,
                     paired,
                     carry,
+                    in_place,
                 });
                 true
             }
