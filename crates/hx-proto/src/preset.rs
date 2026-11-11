@@ -429,6 +429,49 @@ pub struct Snapshot {
     pub colour: Option<i64>,
 }
 
+/// A copied slot's block, as the device's own operations take one: a model
+/// to set, values to set on it one by one, and whether it is engaged.
+///
+/// The values keep the types the document holds them in. A switch is a
+/// boolean and a choice an integer, and the device refuses a parameter sent
+/// as the wrong one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopiedBlock {
+    pub model: u32,
+    /// The cab riding along with an amp, if any.
+    pub paired: Option<u32>,
+    pub enabled: bool,
+    pub values: Vec<Value>,
+    pub paired_values: Vec<Value>,
+}
+
+impl CopiedBlock {
+    /// Read a slot lifted by [`Preset::copy_slot`]. `None` for an empty
+    /// slot, and for anything that is not a block.
+    pub fn of(slot: &Value) -> Option<CopiedBlock> {
+        if !slot_is_well_formed(slot) {
+            return None;
+        }
+        let kind = slot.get(key::KIND).and_then(Value::as_i64)?;
+        if Kind::from_wire(kind) != Kind::Block {
+            return None;
+        }
+        let body = slot.get(key::BODY)?;
+        let raw_values = |field: i64| match body.get(field).and_then(|v| v.get(key::ARRAY_VALUES)) {
+            Some(Value::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let parsed = read_slot(slot);
+        Some(CopiedBlock {
+            model: parsed.model?,
+            paired: parsed.paired,
+            enabled: parsed.enabled,
+            values: raw_values(key::VALUES),
+            paired_values: raw_values(key::PAIRED_VALUES),
+        })
+    }
+}
+
 impl Preset {
     pub const MAGIC: &'static str = "l6-helix";
 
@@ -3096,6 +3139,32 @@ mod tests {
         );
         // The original is untouched - this is a copy, not a move.
         assert_eq!(preset.slots[from].model, source_model);
+    }
+
+    /// A copied block is read for the device's own operations with its values
+    /// as the document types them, and an empty slot is not a block.
+    #[test]
+    fn a_copied_block_keeps_its_values_as_the_document_types_them() {
+        let preset = Preset::parse(FIXTURE).unwrap();
+        let (from, slot) = preset.blocks().next().unwrap();
+        let copied = CopiedBlock::of(&preset.copy_slot(from).unwrap()).expect("a block");
+        assert_eq!(Some(copied.model), slot.model);
+        assert_eq!(copied.paired, slot.paired);
+        assert_eq!(copied.enabled, slot.enabled);
+        assert_eq!(copied.values.len(), slot.values.len());
+        let raw = preset
+            .raw_slot(from)
+            .and_then(|body| body.get(key::VALUES))
+            .and_then(|values| values.get(key::ARRAY_VALUES));
+        assert_eq!(raw, Some(&Value::Array(copied.values.clone())));
+
+        let empty = preset
+            .slots
+            .iter()
+            .position(|s| s.kind == Kind::Empty)
+            .unwrap();
+        assert_eq!(CopiedBlock::of(&preset.copy_slot(empty).unwrap()), None);
+        assert_eq!(CopiedBlock::of(&preset.copy_slot(0).unwrap()), None);
     }
 
     /// A snapshot remembers a slot, not the block in it. A block pasted over

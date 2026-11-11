@@ -888,16 +888,7 @@ impl Worker {
                     self.send(Evt::Failed("there is no block there to copy".into()));
                 }
             }
-            Cmd::PasteBlock(to) => {
-                let Some(block) = self.copied_block.clone() else {
-                    return self.send(Evt::Failed("no block has been copied".into()));
-                };
-                self.edit_document(|p| {
-                    p.paste_slot(to, &block)
-                        .then_some(())
-                        .ok_or("that slot cannot hold a block")
-                });
-            }
+            Cmd::PasteBlock(to) => self.paste_block(to),
             Cmd::CopySnapshot { from, to } => {
                 self.edit_document(|p| {
                     let snap = p.copy_snapshot(from).ok_or("no such snapshot")?;
@@ -1583,6 +1574,59 @@ impl Worker {
             // What was written is what there is - no read-back to race.
             self.present(&preset);
         }
+    }
+
+    /// Put the copied block into a slot.
+    ///
+    /// By the device's own operations where it can be: setting a model is
+    /// what makes the pedal let go of the assignments, footswitches and
+    /// snapshot values that named the block being replaced, and what it
+    /// refuses when the path has no DSP left. An empty slot and an Amp+Cab
+    /// still go in as a document, the first because there is nothing to set
+    /// and the second because how a cab's values are addressed is not known.
+    fn paste_block(&mut self, to: usize) {
+        let Some(block) = self.copied_block.clone() else {
+            return self.send(Evt::Failed("no block has been copied".into()));
+        };
+        let copied = hx_proto::preset::CopiedBlock::of(&block).filter(|b| b.paired.is_none());
+        let Some(copied) = copied else {
+            return self.edit_document(|p| {
+                p.paste_slot(to, &block)
+                    .then_some(())
+                    .ok_or("that slot cannot hold a block")
+            });
+        };
+        let Some(preset) = self.read_settled() else {
+            return;
+        };
+        use hx_proto::preset::Kind;
+        let holds = preset.slots.get(to).map(|slot| slot.kind);
+        if !matches!(holds, Some(Kind::Block | Kind::Empty)) {
+            return self.send(Evt::Failed("that slot cannot hold a block".into()));
+        }
+        let original = preset.encode();
+        let position = to as i64;
+        let Some(declined) = self.try_on_device(|d| d.paste_block(position, &copied)) else {
+            // Refused whole, or lost part of the way: show what is there.
+            if self.device.is_some() {
+                self.reload();
+            }
+            return;
+        };
+        self.dirty = true;
+        self.history.push(original);
+        if self.history.len() > 32 {
+            self.history.remove(0);
+        }
+        self.future.clear();
+        self.report_history();
+        if !declined.is_empty() {
+            self.send(Evt::Failed(format!(
+                "the block is pasted, but the pedal did not take {} of its settings",
+                declined.len()
+            )));
+        }
+        self.reload();
     }
 
     /// The loaded preset's name, or an empty string if the device will not say.
@@ -4820,11 +4864,64 @@ mod tests {
 
         worker.handle(Cmd::CopyBlock(1));
         worker.handle(Cmd::SelectPreset(5));
+        let asked = pedal.lock().unwrap().requests.len();
         worker.handle(Cmd::PasteBlock(7));
 
+        // By the pedal's own operations, so that it lets go of whatever named
+        // the block replaced: the model, each value as the document types it,
+        // and no document.
+        let copied = hx_proto::preset::CopiedBlock::of(&copied).unwrap();
         let pedal = pedal.lock().unwrap();
         assert_eq!(pedal.loaded.1, 5);
-        assert!(block(&pedal.buffer, 7) == copied);
+        let requests = &pedal.requests[asked..];
+        assert!(!requests.iter().any(|(op, _)| *op == op::WRITE_PRESET));
+        let models: Vec<_> = requests
+            .iter()
+            .filter(|(op, _)| *op == op::SET_MODEL)
+            .map(|(_, args)| {
+                (
+                    args.get(key::BLOCK).and_then(Value::as_i64),
+                    args.get(key::MODEL_REF)
+                        .and_then(|model| model.get(key::MODEL))
+                        .and_then(Value::as_i64),
+                )
+            })
+            .collect();
+        assert_eq!(models, [(Some(7), Some(i64::from(copied.model)))]);
+        let values: Vec<_> = requests
+            .iter()
+            .filter(|(op, _)| *op == op::SET_PARAM)
+            .map(|(_, args)| {
+                assert_eq!(args.get(key::BLOCK).and_then(Value::as_i64), Some(7));
+                args.get(key::VALUE).cloned().unwrap()
+            })
+            .collect();
+        assert!(!values.is_empty());
+        assert!(values == copied.values);
+    }
+
+    /// A block its path has no DSP left for is refused by the pedal when its
+    /// model is set, before anything is written: nothing else is sent, and
+    /// the refusal is what the editor shows.
+    #[test]
+    fn a_pasted_block_the_pedal_refuses_changes_nothing() {
+        let pedal = Pedal::new();
+        pedal.lock().unwrap().refuse.insert(op::SET_MODEL, -306);
+        let (mut worker, events) = worker(&pedal);
+
+        worker.handle(Cmd::CopyBlock(1));
+        let asked = pedal.lock().unwrap().requests.len();
+        worker.handle(Cmd::PasteBlock(2));
+
+        let pedal = pedal.lock().unwrap();
+        let sent: Vec<i64> = pedal.requests[asked..].iter().map(|(op, _)| *op).collect();
+        assert!(!sent.contains(&op::SET_PARAM), "{sent:?}");
+        assert!(!sent.contains(&op::WRITE_PRESET), "{sent:?}");
+        assert!(events.try_iter().any(|event| matches!(
+            event,
+            Evt::Failed(why) if why.contains("no DSP left")
+        )));
+        assert!(worker.device.is_some(), "a refusal is not a lost session");
     }
 
     /// A copy that finds nothing leaves nothing to paste, rather than an

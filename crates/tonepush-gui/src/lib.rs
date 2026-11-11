@@ -7086,9 +7086,9 @@ impl App {
     /// Put the copied block into a slot, unless its path has no DSP left for
     /// it.
     ///
-    /// A paste goes out as a whole document, which the pedal does not answer
-    /// with the refusal it gives a model that does not fit, so the block is
-    /// held back here, in the words the browser uses for one.
+    /// The pedal refuses such a block itself, except an Amp+Cab, which goes
+    /// out as a whole document it does not answer. Either is held back
+    /// here, in the words the browser uses for a model that does not fit.
     fn paste_block(&mut self, slot: usize) {
         if !self.copied_block {
             return;

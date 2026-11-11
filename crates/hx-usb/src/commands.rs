@@ -920,6 +920,57 @@ impl Session {
         )
     }
 
+    /// Put a copied block into a slot with the device's own operations: set
+    /// its model, set each value, and bypass it if it was bypassed.
+    ///
+    /// Writing the slot into the document instead left everything that names
+    /// a block by its slot pointing at the block that was replaced: controller
+    /// assignments, footswitches and each snapshot's held values. The device
+    /// clears those itself when a model is set, in three sections of the
+    /// document, and it answers a block its path has no DSP left for with
+    /// `-306` before anything changes, where a document over the budget is
+    /// not answered at all.
+    ///
+    /// Returns the indices of the values the device declined, which is not a
+    /// failure: the block is in place with those left at the model's own.
+    ///
+    /// Not for an Amp+Cab. How a cab's values are addressed is not known, so
+    /// one of those still goes in as a document.
+    pub fn paste_block(
+        &mut self,
+        block: i64,
+        copied: &hx_proto::preset::CopiedBlock,
+    ) -> Result<Vec<i64>> {
+        if copied.paired.is_some() {
+            return Err(Error::Protocol(
+                "an Amp+Cab cannot be pasted by operations".into(),
+            ));
+        }
+        self.set_model(block, copied.model)?;
+        let mut declined = Vec::new();
+        for (index, value) in copied.values.iter().enumerate() {
+            let index = index as i64;
+            // The device is still committing the model for a moment, and a
+            // request that lands in it is refused: one more try tells pacing
+            // from a value it will not take.
+            let taken = match retry_device_refusal(self.set_param(block, index, value.clone()))? {
+                Some(()) => true,
+                None => {
+                    std::thread::sleep(Duration::from_millis(300));
+                    retry_device_refusal(self.set_param(block, index, value.clone()))?.is_some()
+                }
+            };
+            if !taken {
+                declined.push(index);
+            }
+        }
+        // A model arrives engaged.
+        if !copied.enabled {
+            self.set_enabled(block, false)?;
+        }
+        Ok(declined)
+    }
+
     /// Move the editing cursor, which the device's own screen follows.
     pub fn select_block(&mut self, block: i64) -> Result<()> {
         non_negative(block, "block")?;

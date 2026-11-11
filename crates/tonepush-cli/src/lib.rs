@@ -1504,18 +1504,45 @@ fn sanitise(name: &str) -> String {
     }
 }
 
-/// Copy one block over another and write the document back.
+/// Copy one block over another.
+///
+/// By the device's own operations, so that it lets go of the assignments and
+/// snapshot values that named the block replaced and refuses a block the
+/// path has no DSP left for. An emptied slot and an Amp+Cab go in as a
+/// document: there is nothing to set for the first, and how a cab's values
+/// are addressed is not known.
 fn copy_block(session: &mut hx_usb::Session, from: usize, to: usize) -> Result<()> {
+    use hx_proto::preset::{CopiedBlock, Kind};
+
     let source = zero_based(from, "block positions")?;
     let target = zero_based(to, "block positions")?;
     let mut preset = session.read_preset()?;
     let block = preset
         .copy_slot(source)
         .with_context(|| format!("no block at position {from}"))?;
-    if !preset.paste_slot(target, &block) {
+    let holds = preset.slots.get(target).map(|slot| slot.kind);
+    if !matches!(holds, Some(Kind::Block | Kind::Empty)) {
         bail!("slot {to} cannot hold a block - inputs, outputs, splits and joins are fixed");
     }
-    session.write_preset(&preset)?;
+    match CopiedBlock::of(&block).filter(|copied| copied.paired.is_none()) {
+        Some(copied) => {
+            let declined = session.paste_block(target as i64, &copied)?;
+            if !declined.is_empty() {
+                eprintln!(
+                    "the pedal did not take {} of the block's settings",
+                    declined.len()
+                );
+            }
+        }
+        None => {
+            if !preset.paste_slot(target, &block) {
+                bail!(
+                    "slot {to} cannot hold a block - inputs, outputs, splits and joins are fixed"
+                );
+            }
+            session.write_preset(&preset)?;
+        }
+    }
     println!("copied block {from} to {to} (unsaved - run `tonepush save`)");
     Ok(())
 }

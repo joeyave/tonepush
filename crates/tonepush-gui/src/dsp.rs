@@ -296,8 +296,8 @@ mod tests {
         assert_eq!(app.path_room(0).unwrap().budget, 7500);
     }
 
-    /// A paste is a whole document, so nothing on the pedal refuses a block
-    /// its path has no room for: it is held back here.
+    /// A block its path has no room for is held back before the pedal is
+    /// asked.
     #[test]
     fn a_copied_block_is_not_pasted_where_it_does_not_fit() {
         let Some(mut app) = floor() else { return };
