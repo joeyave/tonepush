@@ -1181,8 +1181,14 @@ refused:
   listed as `load`: both went in with 2.55 left and were refused with 2.40.
 - A split and its join cost at most 0.05 together, not the 1.5 listed.
 
-The HX Stomp's budget has not been measured. Helix LT and Rack are likely the
-same as the Floor, but neither has been tried.
+An HX Stomp at firmware 3.80 holds the same **75.0** on its one path: seven
+blocks listed at 59.00 together took a Legendary Drive (16.00), and seven
+listed at 59.01, two of them other models, refused it with `-306`. HX Edit's
+listed loads are not quite the firmware's own table, so a set can be out by
+a hundredth or two: another listed at 75.02 fit and refused 75.03. The
+refusal leaves the edit buffer as it was. Helix LT and Rack are
+likely the same as the Floor, and the HX Stomp XL as the Stomp, but none of
+those has been tried.
 
 One refusal wedged the Floor: a whole-document write sent straight after a
 `-306` left it on "writing, please wait" until a power cycle. Waiting about

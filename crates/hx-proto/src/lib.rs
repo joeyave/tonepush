@@ -116,7 +116,9 @@ pub const HX_STOMP: DeviceProfile = DeviceProfile {
     switches: 5,
     device_id: 0x0021_0006,
     snapshot_colours: false,
-    dsp_budget: None,
+    // Measured at firmware 3.80, as PROTOCOL.md describes: blocks listed at
+    // 75.00 together all went in, and a set listed at 75.01 did not.
+    dsp_budget: Some(7500),
     controls: rpc::ControlLayout::Stomp,
     closes_ir_reads: true,
     closes_sessions: false,

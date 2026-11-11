@@ -262,8 +262,16 @@ mod tests {
     #[test]
     fn a_device_never_measured_holds_nothing_back() {
         let Some(mut app) = floor() else { return };
-        app.device = "HX Stomp".into();
+        app.device = "HX Stomp XL".into();
         assert_eq!(app.path_room(0), None);
         assert_eq!(app.room_at(5), None);
+    }
+
+    /// An HX Stomp has one path, and it holds what a Floor's does.
+    #[test]
+    fn an_hx_stomp_counts_its_path() {
+        let Some(mut app) = floor() else { return };
+        app.device = "HX Stomp".into();
+        assert_eq!(app.path_room(0).unwrap().budget, 7500);
     }
 }
