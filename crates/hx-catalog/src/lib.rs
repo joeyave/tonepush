@@ -696,7 +696,7 @@ impl Catalog {
             .display
             .as_deref()
             .and_then(|key| self.displays.get(key))
-            .map(|d| d.render(value, self))
+            .map(|d| d.render(value, param.min, self))
             .unwrap_or_else(|| format::plain(param, value))
     }
 
@@ -711,8 +711,8 @@ impl Catalog {
         let text = text.trim();
         let entry = param.display.as_deref().and_then(|k| self.displays.get(k));
 
-        if let Some(index) = entry.and_then(|d| d.label_index(text, self)) {
-            return param.accepts(index).then_some(index);
+        if let Some(value) = entry.and_then(|d| d.label_value(text, param.min, self)) {
+            return param.accepts(value).then_some(value);
         }
         if param.kind == Kind::Switch {
             let value = match text.to_ascii_lowercase().as_str() {
@@ -854,6 +854,24 @@ pub(crate) mod tests {
         assert_eq!(nam_lite_label(&values, &irs), "NAM A2 Lite (slot 102)");
         values[NAM_LITE_MODEL_PARAM] = 129.0;
         assert_eq!(nam_lite_slot(&values), None);
+        assert_eq!(nam_lite_label(&values, &irs), "NAM A2 Lite (no capture)");
+        // Zero, a value that is not a number and a short array are no capture.
+        for none in [0.0, 0.99, f32::NAN, f32::INFINITY] {
+            values[NAM_LITE_MODEL_PARAM] = none;
+            assert_eq!(nam_lite_slot(&values), None, "{none}");
+        }
+        assert_eq!(nam_lite_slot(&values[..NAM_LITE_MODEL_PARAM]), None);
+        // Slot 1 is the pedal's IR index 0, and 128 its last.
+        values[NAM_LITE_MODEL_PARAM] = 1.0;
+        assert_eq!(nam_lite_label(&values, &[(0, "Ärger".into())]), "Ärger");
+        values[NAM_LITE_MODEL_PARAM] = 128.0;
+        assert_eq!(nam_lite_label(&values, &[(127, "Last".into())]), "Last");
+        // An IR list that is empty, or names the slot with blanks.
+        assert_eq!(nam_lite_label(&values, &[]), "NAM A2 Lite (slot 128)");
+        assert_eq!(
+            nam_lite_label(&values, &[(127, "  ".into())]),
+            "NAM A2 Lite (slot 128)"
+        );
     }
 
     #[test]
@@ -876,6 +894,18 @@ pub(crate) mod tests {
         assert_eq!(catalog.parse(param, "100"), Some(100.0));
         assert_eq!(catalog.parse(param, "100.5"), None);
         assert_eq!(param.kind.wire(100.0), hx_proto::msgpack::Value::F32(100.0));
+        // The slot is the only list here that is not a catalog menu.
+        assert!(catalog.choices(param).is_none());
+        assert_eq!(catalog.parse(param, "0"), None);
+        assert_eq!(catalog.parse(param, "129"), None);
+        let polarity = catalog.param(NAM_LITE_ID, 3).unwrap();
+        assert_eq!(catalog.format(polarity, 1.0), "Inverted");
+        assert_eq!(catalog.choices(polarity).map(<[String]>::len), Some(2));
+        let q = catalog.param(NAM_LITE_ID, 8).unwrap();
+        assert_eq!(catalog.parse(q, "2.8"), Some(2.0));
+        // The stereo variant is a different number and stays the stock model.
+        assert!(!catalog.is_nam_lite(NAM_LITE_ID + 1));
+        assert_eq!(catalog.model_number(NAM_LITE_ID + 1).unwrap().name, stock);
         assert_eq!(
             catalog.model("HD2_DistXenomorphFuzz").map(|m| &m.name),
             Some(&stock)
@@ -1048,6 +1078,50 @@ pub(crate) mod tests {
         assert_eq!(catalog.parse(&continuous, "5.0"), Some(0.5));
         assert_eq!(catalog.choices(&menu).unwrap(), ["Zero", "One"]);
         assert_eq!(catalog.parse(&menu, "One"), Some(1.0));
+    }
+
+    /// Note Sync counts from 1 and a pitch interval from below zero, so the
+    /// first label is the lowest value, not zero. Reading the label at the
+    /// value itself showed the choice after the one picked.
+    #[test]
+    fn a_menu_that_does_not_start_at_zero_reads_from_its_lowest_value() {
+        let displays: HashMap<String, Display> = serde_json::from_str(
+            r#"{ "sync_note": { "format": ["1/1", "1/2 Dotted", "1/2"] },
+                 "pitch_shift": { "format": ["-2nd", "0", "2nd"] } }"#,
+        )
+        .unwrap();
+        let catalog = Catalog {
+            models: HashMap::new(),
+            categories: Vec::new(),
+            displays,
+            symbols: Vec::new(),
+            resources: PathBuf::new(),
+        };
+        let sync = Param {
+            id: "SyncSelect1".to_owned(),
+            name: "Note Sync".to_owned(),
+            kind: Kind::Enum,
+            min: 1.0,
+            max: 3.0,
+            default: 1.0,
+            display: Some("sync_note".to_owned()),
+        };
+        let interval = Param {
+            min: -1.0,
+            max: 1.0,
+            default: 0.0,
+            display: Some("pitch_shift".to_owned()),
+            ..sync.clone()
+        };
+
+        assert_eq!(catalog.format(&sync, 1.0), "1/1");
+        assert_eq!(catalog.format(&sync, 2.0), "1/2 Dotted");
+        assert_eq!(catalog.format(&sync, 3.0), "1/2");
+        assert_eq!(catalog.parse(&sync, "1/1"), Some(1.0));
+        assert_eq!(catalog.parse(&sync, "1/2"), Some(3.0));
+        assert_eq!(catalog.format(&interval, -1.0), "-2nd");
+        assert_eq!(catalog.format(&interval, 0.0), "0");
+        assert_eq!(catalog.parse(&interval, "2nd"), Some(1.0));
     }
 
     #[test]

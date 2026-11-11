@@ -336,7 +336,6 @@ impl App {
                         let is_ir = param.display.as_deref() == Some("ir_select");
                         let is_nam_model = param.display.as_deref() == Some("nam_slot");
                         let (reading, choices) = if is_ir || is_nam_model {
-                            let slot = (*value).round() as i64;
                             let ir_name = |s: i64| {
                                 self.irs
                                     .iter()
@@ -344,14 +343,20 @@ impl App {
                                     .map(|(_, name)| name.trim().to_owned())
                                     .filter(|name| !name.is_empty())
                             };
-                            let (slot_index, num) = if is_nam_model {
-                                (slot - 1, slot)
+                            // A capture's slot is truncated as the firmware
+                            // does, so the reading names the capture the
+                            // tile does. An IR's value is its index.
+                            let slot = if is_nam_model {
+                                hx_catalog::nam_lite_slot(&values)
                             } else {
-                                (slot, slot + 1)
+                                Some((*value).round() as i64 + 1)
                             };
-                            let reading = match ir_name(slot_index) {
-                                Some(name) => format!("{num}: {name}"),
-                                None => format!("{num}: ---"),
+                            let reading = match slot {
+                                Some(num) => match ir_name(num - 1) {
+                                    Some(name) => format!("{num}: {name}"),
+                                    None => format!("{num}: ---"),
+                                },
+                                None => "No capture".to_owned(),
                             };
                             let choices: Vec<String> = (0..session::IR_SLOTS)
                                 .map(|s| match ir_name(s) {
@@ -589,6 +594,35 @@ impl App {
     }
 }
 
+/// The row of a menu control's list that `value` picks, if it picks one.
+///
+/// The first row is the parameter's lowest value: Note Sync runs 1..19 over
+/// nineteen labels and a Variax string -12..12 over 25, as the pedal shows
+/// them. The NAM capture slots start at the minimum too, and the firmware
+/// truncates them. The IR slot list alone is indexed by the value itself.
+fn menu_row(param: &hx_catalog::Param, value: f32) -> Option<usize> {
+    if param.display.as_deref() == Some("ir_select") {
+        return Some(value.round().max(0.0) as usize);
+    }
+    let row = value - param.min;
+    let row = if param.kind == Kind::Enum {
+        row.round()
+    } else {
+        row.floor()
+    };
+    (row >= 0.0).then_some(row as usize)
+}
+
+/// The value that row `row` of a menu control's list sets: the inverse of
+/// [`menu_row`].
+fn menu_value(param: &hx_catalog::Param, row: usize) -> f32 {
+    if param.display.as_deref() == Some("ir_select") {
+        row as f32
+    } else {
+        row as f32 + param.min
+    }
+}
+
 /// The rule and the cab's name between an amp's controls and its cab's.
 fn group_heading(ui: &mut Ui, title: Option<&str>, width: f32) {
     let (rect, _) = ui.allocate_exact_size(
@@ -760,7 +794,8 @@ fn control_cell(
     let mut current = control.value;
     let mut changed = false;
     let mut parts: Vec<Response> = Vec::new();
-    let menu_like = control.choices.is_some();
+    // A switch with named positions keeps its toggle and its reading.
+    let menu_like = param.kind != Kind::Switch && control.choices.is_some();
     match (param.kind, &control.choices) {
         (Kind::Switch, _) => {
             let mut child = ui.new_child(
@@ -787,9 +822,8 @@ fn control_cell(
                     ))
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             );
-            let chosen = ((current - param.min).round().max(0.0) as usize)
-                .min(choices.len().saturating_sub(1));
-            let tooltip = match choices.get(chosen) {
+            let chosen = menu_row(param, current);
+            let tooltip = match chosen.and_then(|row| choices.get(row)) {
                 Some(full) => format!("{}: {full}", param.name),
                 None => format!("{}: choose", param.name),
             };
@@ -818,12 +852,12 @@ fn control_cell(
                         .max_height(320.0)
                         .show(ui, |ui| {
                             for (n, label) in choices.iter().enumerate() {
-                                let on = n == chosen;
+                                let on = chosen == Some(n);
                                 if theme::menu_item(ui, on.then_some(Icon::Check), label, None)
                                     .clicked()
                                     && !on
                                 {
-                                    current = n as f32 + param.min;
+                                    current = menu_value(param, n);
                                     changed = true;
                                 }
                             }
@@ -4084,6 +4118,47 @@ fn snapshot_column_width(count: usize, width: f32, column: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// A menu's first row is its parameter's lowest value, as the pedal
+    /// shows it: Note Sync 6 is 1/4, the sixth label. The IR slot list is
+    /// the one indexed by the value itself.
+    #[test]
+    fn a_menu_row_counts_from_the_lowest_value() {
+        let param = |kind, min, max| hx_catalog::Param {
+            id: "P".into(),
+            name: "P".into(),
+            kind,
+            min,
+            max,
+            default: min,
+            display: None,
+        };
+        let note_sync = param(Kind::Enum, 1.0, 19.0);
+        assert_eq!(menu_row(&note_sync, 1.0), Some(0));
+        assert_eq!(menu_row(&note_sync, 6.0), Some(5));
+        assert_eq!(menu_value(&note_sync, 5), 6.0);
+        assert_eq!(menu_row(&note_sync, 0.0), None);
+        let tuning = param(Kind::Enum, -12.0, 12.0);
+        assert_eq!(menu_row(&tuning, 0.0), Some(12));
+        assert_eq!(menu_value(&tuning, 24), 12.0);
+        let ir = hx_catalog::Param {
+            display: Some("ir_select".into()),
+            ..param(Kind::Enum, 1.0, 128.0)
+        };
+        assert_eq!(menu_row(&ir, 3.0), Some(3));
+        assert_eq!(menu_value(&ir, 3), 3.0);
+
+        let capture = param(Kind::Continuous, 1.0, 128.0);
+        assert_eq!(menu_row(&capture, 1.0), Some(0));
+        assert_eq!(menu_row(&capture, 128.0), Some(127));
+        // Truncated, as the firmware plays it.
+        assert_eq!(menu_row(&capture, 100.75), Some(99));
+        assert_eq!(menu_value(&capture, 0), 1.0);
+        assert_eq!(menu_value(&capture, 127), 128.0);
+        // No capture is no row: slot 1 must stay pickable.
+        assert_eq!(menu_row(&capture, 0.0), None);
+        assert_eq!(menu_row(&capture, f32::NAN), None);
+    }
+
     /// A menu control, such as a compressor's Ratio or NAM Polarity, opens its
     /// list on a click and takes the choice picked there. The right-click
     /// assignment menu on the same button used to close the list in the frame it
@@ -4105,6 +4180,8 @@ mod tests {
                 id: "Ratio".into(),
                 name: "Ratio".into(),
                 kind: Kind::Enum,
+                // Not zero: a catalog menu's rows are numbered by value, not
+                // from its minimum, as Note Sync (1..19) is.
                 min: 0.0,
                 max: 4.0,
                 default: 2.0,
