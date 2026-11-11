@@ -328,6 +328,9 @@ pub struct App {
     /// copied into this preset or another; remembering only the slot pasted
     /// whatever had come to be there.
     copied_block: bool,
+    /// The copied block's model and paired cab, for what it would cost the
+    /// path it is pasted into.
+    copied_model: Option<(u32, Option<u32>)>,
     /// A copied preset: its name, and the document verbatim. Held in the app
     /// rather than the system clipboard because it is binary, and because
     /// pasting it into a text field would only produce noise.
@@ -1404,6 +1407,7 @@ impl App {
             chain: Vec::new(),
             layout: hx_proto::preset::Layout::default(),
             copied_block: false,
+            copied_model: None,
             clipboard: None,
             pending_copy: CopyTarget::Clipboard,
             dirty: false,
@@ -1697,6 +1701,7 @@ impl App {
                     self.assignments.clear();
                     self.switches.clear();
                     self.copied_block = false;
+                    self.copied_model = None;
                     self.presets.clear();
                     self.irs.clear();
                     self.setlists.clear();
@@ -7073,15 +7078,25 @@ impl App {
     /// keeps it whole, for pasting into this preset or another.
     fn copy_block(&mut self, slot: usize, block: &session::Block) {
         self.copied_block = true;
+        self.copied_model = Some((block.model, block.paired));
         self.send(Cmd::CopyBlock(slot));
         self.note(format!("copied {}", self.slot_label(block)));
     }
 
-    /// Put the copied block into a slot.
+    /// Put the copied block into a slot, unless its path has no DSP left for
+    /// it.
+    ///
+    /// A paste goes out as a whole document, which the pedal does not answer
+    /// with the refusal it gives a model that does not fit, so the block is
+    /// held back here, in the words the browser uses for one.
     fn paste_block(&mut self, slot: usize) {
-        if self.copied_block {
-            self.edit(Cmd::PasteBlock(slot));
+        if !self.copied_block {
+            return;
         }
+        if let Some(short) = self.paste_shortfall(slot) {
+            return self.problem(short);
+        }
+        self.edit(Cmd::PasteBlock(slot));
     }
 
     /// What reaches each block, by block, out of the preset document.

@@ -141,6 +141,27 @@ impl App {
         }
         Some(room)
     }
+
+    /// Why the copied block cannot go into `slot`, where its path has no DSP
+    /// left for it. `None` where it fits, and where the budget or a cost is
+    /// not known.
+    pub(crate) fn paste_shortfall(&self, slot: usize) -> Option<String> {
+        let (model, paired) = self.copied_model?;
+        let catalog = self.catalog.as_ref()?;
+        let cost = block_cost(catalog, model, paired)?;
+        let room = self.room_at(slot)?;
+        if room.fits(cost) {
+            return None;
+        }
+        let (need, left) = percents(cost, room.left(), room.budget);
+        let name = catalog
+            .model_number(model)
+            .map_or("The copied block", |model| model.name.as_str());
+        Some(format!(
+            "{name} needs {need} of path {}'s DSP, and {left} is left",
+            room.path + 1
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -273,5 +294,42 @@ mod tests {
         let Some(mut app) = floor() else { return };
         app.device = "HX Stomp".into();
         assert_eq!(app.path_room(0).unwrap().budget, 7500);
+    }
+
+    /// A paste is a whole document, so nothing on the pedal refuses a block
+    /// its path has no room for: it is held back here.
+    #[test]
+    fn a_copied_block_is_not_pasted_where_it_does_not_fit() {
+        let Some(mut app) = floor() else { return };
+        let stereo_delay = app.chain[2].model;
+        let gain = app.chain[1].model;
+        app.copied_model = Some((stereo_delay, None));
+        assert_eq!(app.paste_shortfall(5), None, "7.14 fits beside 7.65");
+
+        // Three Transient Shapers at 21.50 leave 2.85 of the 75.
+        let shaper = app
+            .catalog
+            .as_ref()
+            .unwrap()
+            .symbols()
+            .iter()
+            .find(|s| s.symbol == "HD2_CompressorTransientShaperMono")
+            .map(|s| s.number)
+            .unwrap();
+        for slot in 3..6 {
+            let mut block = app.chain[2].clone();
+            block.position = slot;
+            block.model = shaper;
+            app.chain.push(block);
+            app.layout.paths[0].head.push(slot as usize);
+        }
+        assert_eq!(app.path_room(0).unwrap().left(), 285);
+        let short = app.paste_shortfall(6).expect("no room for another");
+        assert!(short.contains("of path 1's DSP"), "{short}");
+        // Over the delay already there it takes that delay's room, and fits.
+        assert_eq!(app.paste_shortfall(2), None);
+        // A cheap block still goes into the gap.
+        app.copied_model = Some((gain, None));
+        assert_eq!(app.paste_shortfall(6), None);
     }
 }
