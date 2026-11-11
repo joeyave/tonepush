@@ -1,8 +1,5 @@
 //! `tonepush`, the command-line editor for supported guitar processors.
 
-#[cfg(unix)]
-pub mod bridge;
-
 thread_local! {
     static OUTPUT: std::cell::RefCell<Option<CommandOutput>> = const { std::cell::RefCell::new(None) };
 }
@@ -41,6 +38,11 @@ macro_rules! eprintln {
     ($($arg:tt)*) => { $crate::emit(format_args!("{}\n", format_args!($($arg)*)), true) };
 }
 
+// After the macros above: a module only sees the ones defined before it, and
+// what the bridge reports has to land in the reply, not on the editor's own
+// standard error.
+#[cfg(unix)]
+pub mod bridge;
 mod hlx;
 mod voidx;
 mod wav;
@@ -1151,6 +1153,9 @@ fn show_info(session: &mut hx_usb::Session) -> Result<()> {
             println!("firmware:  {}", p.firmware().unwrap_or_else(|| "?".into()));
             println!("build:     {}", p.build().unwrap_or("?"));
         }
+        // A preset that cannot be read is worth a note. A transport that has
+        // gone quiet is not something to carry on from.
+        Err(e) if e.loses_session() => return Err(e.into()),
         Err(e) => println!("(could not read preset for firmware: {e})"),
     }
     Ok(())
@@ -1168,6 +1173,7 @@ fn show_preset(session: &mut hx_usb::Session, raw: bool) -> Result<()> {
             session.profile.slot_label(index),
             name
         ),
+        Err(e) if e.loses_session() => return Err(e.into()),
         Err(e) => println!("preset:   (metadata unavailable: {e})"),
     }
     println!(
@@ -2452,7 +2458,7 @@ mod tests {
 
     /// A pedal that answers every request with an empty success and keeps
     /// what it was asked, for seeing which block a command addresses.
-    mod pedal {
+    pub(crate) mod pedal {
         use std::collections::{BTreeMap, VecDeque};
         use std::sync::{Arc, Mutex};
         use std::time::Duration;

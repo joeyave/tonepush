@@ -225,7 +225,9 @@ window refreshes when a command or batch finishes. `watch` follows device
 notifications without holding up other commands. Relative file arguments
 resolve from the CLI's working directory. Direct USB access is available when
 the variable is unset. Offline and StompStation PRO commands still run in the
-CLI. Close the editor to remove the socket.
+CLI. The editor only takes commands from the account running it. Close the
+editor to remove the socket; one left behind by an editor that did not close
+cleanly is replaced the next time it starts.
 
 For an HX Stomp running the ten-control HX Stomp NAM Lite mod that
 reuses model ID 555, set `TONEPUSH_HX_NAM_LITE=1` when starting TonePush.
