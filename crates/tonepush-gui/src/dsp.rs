@@ -296,6 +296,42 @@ mod tests {
         assert_eq!(app.path_room(0).unwrap().budget, 7500);
     }
 
+    /// A model's mono and stereo variants are different numbers at different
+    /// prices. Both shelves took the first the firmware lists: a Searchlights
+    /// chosen from the Mono shelf went in stereo, and a stereo Plateaux was
+    /// priced as the mono one.
+    #[test]
+    fn a_shelf_places_and_prices_its_own_variant() {
+        let Some(app) = floor() else { return };
+        let catalog = app.catalog.as_ref().unwrap();
+        let symbol_of = |id: &str, stereo| {
+            let number = crate::number_of_width(catalog, id, stereo).unwrap();
+            (catalog.symbol(number).unwrap().symbol.clone(), number)
+        };
+
+        let (mono, mono_number) = symbol_of("HD2_ReverbSearchlights", Some(false));
+        let (stereo, stereo_number) = symbol_of("HD2_ReverbSearchlights", Some(true));
+        assert_eq!(mono, "HD2_ReverbSearchlightsMono");
+        assert_eq!(stereo, "HD2_ReverbSearchlightsStereo");
+        assert_eq!(crate::stereo_variant(catalog, mono_number), Some(false));
+        assert_eq!(crate::stereo_variant(catalog, stereo_number), Some(true));
+
+        let cost = |stereo| {
+            let (_, number) = symbol_of("HD2_ReverbPlateaux", stereo);
+            block_cost(catalog, number, None).unwrap()
+        };
+        assert_eq!(cost(Some(false)), hundredths(10.0));
+        assert_eq!(cost(Some(true)), hundredths(12.5));
+
+        // A model that comes one way has one number, whatever is asked.
+        let gain = app.chain[1].model;
+        let id = catalog.model_number(gain).unwrap().id.clone();
+        assert_eq!(
+            crate::number_of_width(catalog, &id, None),
+            crate::number_of(catalog, &id)
+        );
+    }
+
     /// A block its path has no room for is held back before the pedal is
     /// asked.
     #[test]
