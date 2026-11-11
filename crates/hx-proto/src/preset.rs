@@ -1337,6 +1337,15 @@ impl Preset {
     /// Returns false if either side is not an effect/empty position. Inputs,
     /// outputs and junctions are fixtures of the topology, not slots that can
     /// be moved or filled.
+    ///
+    /// Every snapshot's memory of whether this slot was on is set to the
+    /// pasted block's own state. A snapshot names a block by its slot, so it
+    /// went on remembering the block that was replaced: an engaged delay
+    /// pasted over a bypassed one left a document whose slot said on and
+    /// whose active snapshot said off. The device never produces that (in
+    /// 125 presets read from an HX Stomp, every block agreed with the active
+    /// snapshot), and an HX Stomp sent one dropped the session and reset the
+    /// preset.
     pub fn paste_slot(&mut self, position: usize, slot: &Value) -> bool {
         if !slot_is_well_formed(slot) {
             return false;
@@ -1357,6 +1366,24 @@ impl Preset {
         };
         *existing = slot.clone();
         self.slots = collect_slots(&self.tone);
+        let enabled = self.slots[position].enabled;
+        if let Some(Value::Array(snapshots)) =
+            self.tone.at_mut(&[key::SNAPSHOT_SECTION, key::SNAPSHOTS])
+        {
+            for snapshot in snapshots {
+                let state = match snapshot.get_mut(key::SNAPSHOT_SLOTS) {
+                    Some(Value::Array(states)) => states.get_mut(position),
+                    _ => None,
+                };
+                // `[?, enabled]`. A stored preset leaves a state unset where
+                // the block was off, and that is left as it is.
+                if let Some(Value::Array(pair)) = state {
+                    if let Some(on @ Value::Bool(_)) = pair.get_mut(1) {
+                        *on = Value::Bool(enabled);
+                    }
+                }
+            }
+        }
         true
     }
 
@@ -3069,6 +3096,41 @@ mod tests {
         );
         // The original is untouched - this is a copy, not a move.
         assert_eq!(preset.slots[from].model, source_model);
+    }
+
+    /// A snapshot remembers a slot, not the block in it. A block pasted over
+    /// one in the other bypass state has to take the snapshots with it, or
+    /// the slot and the active snapshot disagree about whether it is on.
+    #[test]
+    fn a_pasted_block_takes_every_snapshots_bypass_state_with_it() {
+        let mut preset = Preset::parse(FIXTURE).unwrap();
+        let blocks: Vec<usize> = preset.blocks().map(|(position, _)| position).collect();
+        let (from, to) = (blocks[0], blocks[1]);
+        let block = preset.copy_slot(from).unwrap();
+        let enabled = preset.slots[from].enabled;
+
+        // The block being replaced was in the other state in every snapshot.
+        let Some(Value::Array(snapshots)) =
+            preset.tone.at_mut(&[key::SNAPSHOT_SECTION, key::SNAPSHOTS])
+        else {
+            panic!("snapshots");
+        };
+        for snapshot in snapshots {
+            let Some(Value::Array(states)) = snapshot.get_mut(key::SNAPSHOT_SLOTS) else {
+                panic!("snapshot states");
+            };
+            states[to] = Value::Array(vec![Value::Bool(false), Value::Bool(!enabled)]);
+        }
+
+        assert!(preset.paste_slot(to, &block));
+
+        assert_eq!(preset.slots[to].enabled, enabled);
+        let reparsed = Preset::parse(&preset.encode()).expect("the paste re-parses");
+        let snapshots = reparsed.snapshot_details();
+        assert!(!snapshots.is_empty());
+        for snapshot in snapshots {
+            assert_eq!(snapshot.enabled[to], Some(enabled), "{}", snapshot.name);
+        }
     }
 
     /// The endpoints are fixtures of the topology. Pasting a block over the
