@@ -224,6 +224,10 @@ pub enum Cmd {
         model: u32,
         /// The cab that rides along, for an Amp+Cab. `None` for everything else.
         paired: Option<u32>,
+        /// Settings to give the model once it is in: `(parameter index,
+        /// native value, the catalog's kind for it)`. A block changed for
+        /// its own mono or stereo variant keeps what was dialled in.
+        carry: Vec<(i64, f32, hx_catalog::Kind)>,
     },
     /// Put the preset back as it was before the first try.
     PutBack,
@@ -844,7 +848,8 @@ impl Worker {
                 block,
                 model,
                 paired,
-            } => self.try_model(block, model, paired),
+                carry,
+            } => self.try_model(block, model, paired, &carry),
             Cmd::PutBack => self.put_back(),
             Cmd::KeepTry => self.keep_try(),
             Cmd::SelectBlock(block) => {
@@ -1926,7 +1931,13 @@ impl Worker {
     /// Play a model in a block's place. The first try puts the preset as it
     /// stands aside with its undo state, so Put back can restore it byte for
     /// byte and Keep can make all the tries one step.
-    fn try_model(&mut self, block: i64, model: u32, paired: Option<u32>) {
+    fn try_model(
+        &mut self,
+        block: i64,
+        model: u32,
+        paired: Option<u32>,
+        carry: &[(i64, f32, hx_catalog::Kind)],
+    ) {
         if self.trial.is_none() {
             let Some(original) = self.preset_bytes() else {
                 return;
@@ -1943,7 +1954,31 @@ impl Worker {
         }
         if self.run_on_device(|d| place(d, block, model, paired)) {
             self.dirty = true;
+            self.carry_settings(block, carry);
             self.reload();
+        }
+    }
+
+    /// Give a model just placed the settings its block had.
+    ///
+    /// A new model arrives at its defaults. The pedal is still committing it
+    /// when the first value follows, and refuses a request that lands
+    /// mid-commit, so each value is asked quietly and, refused, asked again
+    /// once the preset has read back settled.
+    fn carry_settings(&mut self, block: i64, carry: &[(i64, f32, hx_catalog::Kind)]) {
+        if carry.is_empty() {
+            return;
+        }
+        let _ = self.read_settled();
+        for &(index, value, kind) in carry {
+            let wire = kind.wire(value);
+            if self.quietly(|d| d.set_param(block, index, wire.clone())) {
+                continue;
+            }
+            let _ = self.read_settled();
+            if !self.run_on_device(|d| d.set_param(block, index, wire)) {
+                return;
+            }
         }
     }
 
@@ -3731,6 +3766,7 @@ mod tests {
             block: 1,
             model: 7,
             paired: None,
+            carry: Vec::new(),
         });
         // The pretend pedal takes a model without changing its buffer; this
         // stands in for what a real one does.
@@ -3739,6 +3775,7 @@ mod tests {
             block: 1,
             model: 8,
             paired: None,
+            carry: Vec::new(),
         });
         assert!(worker.history.is_empty(), "the tries are not undo steps");
         assert!(worker.dirty);
@@ -3762,6 +3799,7 @@ mod tests {
                 block: 1,
                 model,
                 paired: None,
+                carry: Vec::new(),
             });
         }
         worker.handle(Cmd::KeepTry);
@@ -3780,6 +3818,7 @@ mod tests {
             block: 1,
             model: 7,
             paired: None,
+            carry: Vec::new(),
         });
         pedal.lock().unwrap().buffer = document(150.0);
         worker.handle(Cmd::SetTempo(96.0));
@@ -3803,6 +3842,7 @@ mod tests {
             block: 1,
             model: 7,
             paired: None,
+            carry: Vec::new(),
         });
         assert!(worker.trial.is_some());
         pedal.lock().unwrap().unplugged = true;
@@ -3929,6 +3969,44 @@ mod tests {
             Evt::PedalParam { block: 2, index: 1, value } if *value == 0.25
         )));
         assert!(worker.dirty, "the edit buffer changed without us");
+    }
+
+    /// A block changed for its own mono or stereo variant keeps what was
+    /// dialled in: the new model arrives at its defaults, and the settings
+    /// follow it, after the model and in the order given.
+    #[test]
+    fn a_tried_model_is_given_the_settings_carried_to_it() {
+        let pedal = Pedal::new();
+        let (mut worker, _events) = worker(&pedal);
+        pedal.lock().unwrap().requests.clear();
+
+        worker.handle(Cmd::TryModel {
+            block: 1,
+            model: 8,
+            paired: None,
+            carry: vec![
+                (0, 0.25, hx_catalog::Kind::Continuous),
+                (2, 1.0, hx_catalog::Kind::Switch),
+            ],
+        });
+
+        let pedal = pedal.lock().unwrap();
+        let placed = pedal
+            .requests
+            .iter()
+            .position(|(op, _)| *op == op::SET_MODEL)
+            .expect("the model goes in");
+        let set: Vec<(i64, Value)> = pedal.requests[placed..]
+            .iter()
+            .filter(|(op, _)| *op == op::SET_PARAM)
+            .map(|(_, args)| {
+                (
+                    args.get(key::PARAM_INDEX).and_then(Value::as_i64).unwrap(),
+                    args.get(key::VALUE).cloned().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(set, [(0, Value::F32(0.25)), (2, Value::Bool(true))]);
     }
 
     /// The bypass of block `block`, as event 49 announces it.

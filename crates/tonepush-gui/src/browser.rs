@@ -33,6 +33,9 @@ pub(crate) enum Target {
         original_id: Option<String>,
         /// The number the block held: which variant of that model it was.
         original_number: u32,
+        /// What the block's controls were set to, to carry over to the
+        /// other variant of the same model.
+        original_values: Vec<f32>,
         paired: bool,
     },
     /// Choosing a block for a gap: the slot it goes into.
@@ -368,6 +371,7 @@ impl App {
                 original: self.slot_label(&block),
                 original_id,
                 original_number: block.model,
+                original_values: block.values.clone(),
                 paired: block.paired.is_some(),
             },
             rail,
@@ -1199,6 +1203,7 @@ impl App {
                 position,
                 original_id,
                 original_number,
+                original_values,
                 paired: was_paired,
                 ..
             } => {
@@ -1225,11 +1230,24 @@ impl App {
                 }
                 browser.playing = Some((id.clone(), name));
                 browser.playing_number = model;
+                // The block's own model the other way round, mono for
+                // stereo, keeps what was dialled in.
+                let carry = match &self.catalog {
+                    Some(catalog)
+                        if original_id.as_deref() == Some(id.as_str())
+                            && !was_paired
+                            && paired.is_none() =>
+                    {
+                        crate::carried_settings(catalog, original_number, model, &original_values)
+                    }
+                    _ => Vec::new(),
+                };
                 self.dirty = true;
                 self.send(Cmd::TryModel {
                     block: position,
                     model,
                     paired,
+                    carry,
                 });
                 true
             }
