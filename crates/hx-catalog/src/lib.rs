@@ -285,12 +285,19 @@ pub enum Error {
 impl Catalog {
     /// Load from wherever HX Edit is installed.
     pub fn load() -> Result<Catalog, Error> {
-        let dir = resources_dir().ok_or_else(|| Error::NotInstalled(default_resources()))?;
-        let mut catalog = Catalog::load_from(&dir)?;
-        if std::env::var_os("TONEPUSH_HX_NAM_LITE").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        let mut catalog = Catalog::load_stock()?;
+        // This fork reads model 555 as NAM Lite unless told otherwise.
+        if std::env::var_os("TONEPUSH_HX_NAM_LITE").as_deref() != Some(std::ffi::OsStr::new("0")) {
             catalog.enable_nam_lite();
         }
         Ok(catalog)
+    }
+
+    /// Load from wherever HX Edit is installed, reading every model as HX
+    /// Edit does, model 555 included.
+    pub fn load_stock() -> Result<Catalog, Error> {
+        let dir = resources_dir().ok_or_else(|| Error::NotInstalled(default_resources()))?;
+        Catalog::load_from(&dir)
     }
 
     /// Load from an explicit resources directory.
@@ -827,7 +834,7 @@ pub(crate) mod tests {
     /// but will not parse is a genuine failure, and must not pass quietly -
     /// swallowing it once already let a parse bug through.
     pub(crate) fn catalog() -> Option<Catalog> {
-        match Catalog::load() {
+        match Catalog::load_stock() {
             Ok(c) => Some(c),
             Err(Error::NotInstalled(_)) => {
                 // A silent green tick would be a lie: on a machine without HX

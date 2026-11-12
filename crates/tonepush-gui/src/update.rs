@@ -38,7 +38,7 @@ use crate::theme;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Where a person goes to get a newer one.
-pub const RELEASES: &str = "https://github.com/crmne/tonepush/releases/latest";
+pub const RELEASES: &str = "https://github.com/joeyave/tonepush/releases/latest";
 
 /// TonePush's releases, as the updater needs to know them.
 ///
@@ -59,7 +59,9 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
     // Releases sign checksums.txt with the matching private key; a release
     // without a valid signature is never downloaded.
     publisher_key: Some(include_str!("../../../assets/update-public-key.hex")),
-    ..UpdateConfig::new("crmne/tonepush", "TonePush", "tonepush", VERSION)
+    // This fork looks for its own releases, which carry no signature the
+    // upstream key accepts, so it is never replaced by an upstream build.
+    ..UpdateConfig::new("joeyave/tonepush", "TonePush", "tonepush", VERSION)
 };
 
 /// What `--version` prints. The previous release's update helper runs a
@@ -694,7 +696,7 @@ mod tests {
     fn update_config_is_valid() {
         CONFIG.validate().unwrap();
         assert_eq!(CONFIG.current_version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(CONFIG.repository, "crmne/tonepush");
+        assert_eq!(CONFIG.repository, "joeyave/tonepush");
         assert_eq!(CONFIG.slug, "tonepush");
         assert!(CONFIG.publisher_key.is_some());
     }
