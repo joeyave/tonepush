@@ -1,3 +1,101 @@
+# TonePush NAM (fork)
+
+> **This is a fork of [crmne/tonepush](https://github.com/crmne/tonepush) that
+> supports NAM captures on an HX Stomp running the NAM Lite mod.** It also
+> carries a handful of fixes that are waiting as pull requests upstream. Once
+> they are merged, use the [original project](https://github.com/crmne/tonepush)
+> instead. Downloads: [latest fork release](https://github.com/joeyave/tonepush/releases/latest).
+
+## What this fork adds
+
+**NAM Lite captures on HX Stomp** ([crmne/tonepush#106](https://github.com/crmne/tonepush/pull/106)).
+The NAM Lite mod reuses the stock model 555, so stock TonePush shows a NAM
+block as a Xenomorph Fuzz with fuzz knob names. This fork shows it as NAM, with
+its ten controls and the name of the selected capture taken from the pedal's
+IR list, lists the NAM A2 Lite block in the model browser and counts what it
+costs of the DSP. It is on by default; on stock firmware start TonePush with
+`TONEPUSH_HX_NAM_LITE=0`. See [How to use NAM captures](#how-to-use-nam-captures).
+
+Smaller fixes, each one an upstream pull request:
+
+- Menus show the value you picked: Note Sync, pitch and other lists that do
+  not start at zero no longer show a different value on the button than the
+  ticked row ([#120](https://github.com/crmne/tonepush/pull/120)).
+- Menu buttons stay inside their column, and IR blocks show the IR's name
+  from the pedal ([#107](https://github.com/crmne/tonepush/pull/107)).
+- The HX Stomp stays connected when a footswitch controls a snapshot
+  ([#99](https://github.com/crmne/tonepush/pull/99)).
+- Large uploads stay inside the HX Stomp's receive window
+  ([#111](https://github.com/crmne/tonepush/pull/111)), and empty IR slots
+  are never read ([#110](https://github.com/crmne/tonepush/pull/110)).
+- Stomps and knobs used on the pedal itself show up in the editor
+  ([#112](https://github.com/crmne/tonepush/pull/112)).
+- Each block shows how much of its path's DSP it uses
+  ([#116](https://github.com/crmne/tonepush/pull/116)); the Mono or Stereo
+  variant is placed and priced as the shelf shows it
+  ([#114](https://github.com/crmne/tonepush/pull/114)) and keeps its settings
+  when switched ([#115](https://github.com/crmne/tonepush/pull/115)).
+- The `tonepush` CLI can drive the editor's open HX session
+  ([#103](https://github.com/crmne/tonepush/pull/103)).
+- Not yet proposed upstream: copying a block between presets, and an HX
+  Stomp's DSP counted the way the pedal counts it.
+
+## Installing this fork
+
+Download the file for your system from the
+[latest release](https://github.com/joeyave/tonepush/releases/latest). The
+builds are not signed, so the system warns on first launch. You also need
+[HX Edit](https://line6.com/software/) installed once: TonePush reads model
+names and knob ranges from it.
+
+**macOS** (Apple Silicon and Intel): unpack `...-macos-universal.zip`, move
+`TonePush NAM.app` to Applications, then run once in Terminal:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/TonePush NAM.app"
+```
+
+**Windows** (x64): unpack `...-x86_64-pc-windows-msvc.zip` and run
+`tonepush-gui.exe`. If SmartScreen warns, choose More info, then Run anyway.
+
+**Linux** (x64): unpack `...-x86_64-unknown-linux-gnu.tar.gz`, then in that
+folder allow your user to reach the pedal and start the editor:
+
+```sh
+sudo install -m644 70-line6-hx.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+./tonepush-gui
+```
+
+Replug the pedal after adding the rule. Install `p7zip` for the first-launch
+extraction of HX Edit's data.
+
+**From source** (any system, with [Rust](https://rustup.rs)):
+
+```sh
+git clone -b app/integrated https://github.com/joeyave/tonepush.git
+cd tonepush
+cargo build --release -p tonepush-gui -p tonepush-cli
+./target/release/tonepush-gui
+```
+
+This fork does not update itself from upstream releases, so a newer official
+TonePush never replaces it. Download a new fork release to update.
+
+## How to use NAM captures
+
+1. Flash the NAM Lite mod on your HX Stomp following the mod's own
+   instructions.
+2. Load your captures into the pedal's IR slots as the mod describes. The
+   capture name TonePush shows is the IR slot's name, which the pedal may
+   shorten.
+3. In TonePush, add **NAM A2 Lite** from the model browser, or open a preset
+   that has one, and pick the capture in the **Model** control.
+
+---
+
+The rest of this page is the upstream README.
+
 # TonePush
 
 [![CI](https://github.com/crmne/tonepush/actions/workflows/ci.yml/badge.svg)](https://github.com/crmne/tonepush/actions/workflows/ci.yml)
@@ -230,9 +328,9 @@ editor to remove the socket; one left behind by an editor that did not close
 cleanly is replaced the next time it starts.
 
 For an HX Stomp running the ten-control HX Stomp NAM Lite mod that
-reuses model ID 555, set `TONEPUSH_HX_NAM_LITE=1` when starting TonePush.
-The editor and CLI then show NAM controls and resolve capture names from the
-pedal's IR slot list. Enable this setting only with that firmware.
+reuses model ID 555, this fork shows NAM controls in the editor and CLI and
+resolves capture names from the pedal's IR slot list. On stock firmware, where
+model 555 is the Xenomorph Fuzz, start TonePush with `TONEPUSH_HX_NAM_LITE=0`.
 
 StompStation PRO commands live under `tonepush pro`, so the two devices'
 different slot conventions cannot be confused:

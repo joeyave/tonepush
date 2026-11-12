@@ -1,0 +1,122 @@
+# Unsigned builds of this fork (joeyave/tonepush, branch app/integrated) for
+# people who want NAM Lite support before the upstream pull requests merge.
+# Upstream's release.yml only runs on v* tags; this one only on nam-v* tags.
+name: Fork release
+
+on:
+  push:
+    tags: ["nam-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 keeps the binaries running on older glibc.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: rustup target add ${{ matrix.target }}
+      - name: GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libudev-dev
+      - run: cargo build --release -p tonepush-cli -p tonepush-gui --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name="tonepush-nam-${GITHUB_REF_NAME#nam-}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/tonepush.exe" "target/${{ matrix.target }}/release/tonepush-gui.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/tonepush" "target/${{ matrix.target }}/release/tonepush-gui" "dist/$name/"
+            cp packaging/udev/70-line6-hx.rules packaging/applications/tonepush.desktop packaging/icons/tonepush.svg "dist/$name/"
+          fi
+          cp README.md LICENSE "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "$name.zip" "$name"
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build both architectures
+        run: |
+          cargo build --release -p tonepush-cli -p tonepush-gui --target aarch64-apple-darwin
+          cargo build --release -p tonepush-cli -p tonepush-gui --target x86_64-apple-darwin
+      - name: Universal app
+        run: |
+          version="${GITHUB_REF_NAME#nam-v}"
+          name="tonepush-nam-${GITHUB_REF_NAME#nam-}-macos-universal"
+          mkdir -p universal "dist/$name"
+          for bin in tonepush tonepush-gui; do
+            lipo -create "target/aarch64-apple-darwin/release/$bin" \
+              "target/x86_64-apple-darwin/release/$bin" -output "universal/$bin"
+          done
+          bash packaging/macos/bundle.sh universal/tonepush-gui "dist/$name/TonePush NAM.app" "${version%%-*}"
+          # Ad hoc signature only: Apple Silicon refuses unsigned code, and
+          # this fork has no Developer ID to notarize with.
+          codesign --force --deep --sign - "dist/$name/TonePush NAM.app"
+          cp universal/tonepush README.md LICENSE "dist/$name/"
+          codesign --force --sign - "dist/$name/tonepush"
+          cd dist && ditto -c -k --keepParent "$name" "$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [build, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > checksums.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "TonePush NAM ${GITHUB_REF_NAME#nam-}" \
+            --notes-file packaging/fork-release-notes.md
